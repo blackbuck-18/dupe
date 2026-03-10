@@ -123,10 +123,11 @@ with st.sidebar:
 # ==========================================
 # 5. TABS LAYOUT 
 # ==========================================
-tab1, tab2, tab3 = st.tabs(["🔍 Search Files", "🧠 Smart Clusters", "🤖 AI Editor"])
+# FIXED: Updated variable names to be semantic and match the code below
+tab_search, tab_cluster, tab_editor = st.tabs(["🔍 Search Files", "🧠 Smart Clusters", "🤖 AI Editor"])
 
 # --- TAB 1: SEARCH ---
-with tab1:
+with tab_search:
     st.header("Search Your Offline Files")
     search_query = st.text_input("What are you looking for?")
     
@@ -134,28 +135,30 @@ with tab1:
         if not BACKEND_READY:
             st.info(f"Dummy search results for: {search_query}")
         else:
-            # REAL AI VECTOR SEARCH
-            results = st.session_state.vector_db.search(search_query)
-            
-            if not results:
-                st.info("No matching documents found.")
-            else:
-                st.write(f"Top results for: **{search_query}**")
-                for file in results:
-                    with st.container(border=True):
-                        st.subheader(file['filename'])
-                        st.caption(f"Path: {file['filepath']}")
-                        # Show a preview snippet of the text
-                        st.write(file['text_content'][:300] + "...")
+            with st.spinner("Searching vector space..."):
+                # FIXED: Called the method on the session_state object
+                # Ensure your VectorDB class in backend/vector_engine.py has a 'search_documents' method
+                search_results = st.session_state.vector_db.search_documents(query_text=search_query)
+                
+                if "error" in search_results:
+                    st.info(search_results["error"])
+                else:
+                    st.success(f"Found {len(search_results['matches'])} relevant matches.")
+                    
+                    for match in search_results['matches']:
+                        with st.container(border=True):
+                            st.markdown(f"**📄 {match['filename']}** (Distance: `{match['distance']}`)")
+                            st.caption(f"Path: {match['filepath']}")
+                            st.write(match['snippet'])
 
 # --- TAB 2: CLUSTERING ---
-with tab2:
+with tab_cluster:
     st.header("Group Similar Files")
     st.write("Use AI to automatically group your files by topic.")
     
     if st.button("Group Similar Files"):
         if BACKEND_READY:
-            # REAL K-MEANS CLUSTERING
+            # REAL CLUSTERING
             cluster_results = st.session_state.vector_db.cluster_files()
             
             if 'error' in cluster_results:
@@ -165,14 +168,14 @@ with tab2:
             else:
                 st.success("Clusters generated successfully!")
                 for cluster_id, files in cluster_results.items():
-                    st.write(f"### 🤖 Cluster {cluster_id + 1}")
+                    st.write(f"### 🤖  {cluster_id}")
                     for f in files:
                         st.write(f"- {f}")
         else:
             st.success("Simulated Clusters generated successfully!")
 
 # --- TAB 3: AI EDITOR ---
-with tab3:
+with tab_editor:
     st.header("Offline AI Editor")
     st.caption("Strictly routes to local Ollama engine.")
     
