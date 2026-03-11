@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import time
 import config
+import pandas as pd
 
 # ==========================================
 # 0. PAGE CONFIG (Must be the absolute first command!)
@@ -109,7 +110,8 @@ with st.sidebar:
                                 st.session_state.vector_db.add_file(
                                     filename=parsed_data['filename'],
                                     filepath=parsed_data['filepath'],
-                                    text=parsed_data['text_content']
+                                    text=parsed_data['text_content'],
+                                    mtime=os.path.getmtime(filepath)
                                 )
                                 st.session_state.scan_results.append(parsed_data)
                                 
@@ -127,8 +129,8 @@ with st.sidebar:
 # ==========================================
 # 5. TABS LAYOUT 
 # ==========================================
-# ADDED a 4th tab for Document Management
-tab_search, tab_cluster, tab_editor, tab_manage = st.tabs(["🔍 Search Files", "🧠 Smart Clusters", "🤖 AI Editor", "🗄️ Manage Files"])
+# ADDED a 5th tab for Database Insights!
+tab_search, tab_cluster, tab_editor, tab_manage, tab_insights = st.tabs(["🔍 Search Files", "🧠 Smart Clusters", "🤖 AI Editor", "🗄️ Manage Files", "📊 Insights"])
 
 # --- TAB 1: SEARCH ---
 with tab_search:
@@ -194,20 +196,18 @@ with tab_editor:
             st.write(dummy_reply)
             st.session_state.chat_messages.append({"role": "assistant", "content": dummy_reply})
 
-# --- TAB 4: MANAGE FILES (UNDO/DELETE LOGIC) ---
+# --- TAB 4: MANAGE FILES ---
 with tab_manage:
     st.header("Database File Management")
     st.write("Safely remove indexed files from your AI's memory.")
 
     if BACKEND_READY and st.session_state.vector_db:
-        # 1. SHOW THE UNDO / CONFIRM MENU IF ITEMS ARE IN THE TRASH
         if st.session_state.undo_stack:
             st.warning(f"🗑️ You have {len(st.session_state.undo_stack)} file(s) pending permanent deletion.")
             col_undo, col_confirm = st.columns(2)
             
             with col_undo:
                 if st.button("↩️ Undo Last Deletion", use_container_width=True):
-                    # Pop the filepath back out of the trash
                     recovered_filepath = st.session_state.undo_stack.pop()
                     st.session_state.pending_deletes.remove(recovered_filepath)
                     
@@ -218,11 +218,9 @@ with tab_manage:
             
             with col_confirm:
                 if st.button("⚠️ Permanently Delete All", type="primary", use_container_width=True):
-                    # Physically wipe them from ChromaDB
                     for filepath in st.session_state.pending_deletes:
                         st.session_state.vector_db.remove_file(filepath)
                     
-                    # Clear the trash
                     st.session_state.undo_stack.clear()
                     st.session_state.pending_deletes.clear()
                     
@@ -232,10 +230,7 @@ with tab_manage:
             
             st.divider()
 
-        # 2. LIST ALL ACTIVE FILES
         db_files = st.session_state.vector_db.get_file_metadata()
-        
-        # Filter out the files that are currently sitting in the trash
         active_filepaths = [fp for fp in db_files.keys() if fp not in st.session_state.pending_deletes]
 
         if not active_filepaths:
@@ -251,9 +246,69 @@ with tab_manage:
                 
                 with col2:
                     if st.button("Delete", key=f"del_{filepath}"):
-                        # Move to trash (Soft Delete)
                         st.session_state.pending_deletes.append(filepath)
                         st.session_state.undo_stack.append(filepath)
                         
                         st.toast(f"Moved '{filename}' to trash.", icon="🗑️")
                         st.rerun()
+
+# --- TAB 5: INSIGHTS & ANALYTICS ---
+with tab_insights:
+    st.header("📊 Database Insights")
+    st.write("A real-time overview of your local AI knowledge base.")
+
+    if BACKEND_READY and st.session_state.vector_db:
+        db_files = st.session_state.vector_db.get_file_metadata()
+        active_filepaths = [fp for fp in db_files.keys() if fp not in st.session_state.pending_deletes]
+
+        if not active_filepaths:
+            st.info("No data available to visualize. Scan a folder first!")
+        else:
+            # 1. Calculate Metrics
+            total_files = len(active_filepaths)
+            file_types = {}
+            total_size_bytes = 0
+            
+            for fp in active_filepaths:
+                # Get file extension (e.g., '.pdf') and remove the dot
+                ext = os.path.splitext(fp)[1].lower().replace(".", "").upper()
+                if not ext:
+                    ext = "UNKNOWN"
+                    
+                file_types[ext] = file_types.get(ext, 0) + 1
+                
+                # Check actual file size on the hard drive
+                if os.path.exists(fp):
+                    total_size_bytes += os.path.getsize(fp)
+
+            # Convert bytes to Megabytes (MB)
+            total_size_mb = total_size_bytes / (1024 * 1024)
+
+            # 2. Render Top KPI Metrics
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Indexed Files", total_files)
+            with col2:
+                st.metric("Total Storage Tracked", f"{total_size_mb:.2f} MB")
+            with col3:
+                st.metric("Document Types", len(file_types))
+
+            st.divider()
+
+            # 3. Render Visual Charts and Insights
+            col_chart1, col_chart2 = st.columns([2, 1])
+
+            with col_chart1:
+                st.subheader("Distribution by File Type")
+                # Create a Pandas DataFrame to perfectly format the Streamlit Bar Chart
+                chart_data = pd.DataFrame(
+                    {"Count": list(file_types.values())}, 
+                    index=list(file_types.keys())
+                )
+                st.bar_chart(chart_data, color="#1E88E5")
+
+            with col_chart2:
+                st.subheader("AI Knowledge Base Summary")
+                st.write(f"- Your local AI engine currently has instant memory access to **{total_files} distinct documents**.")
+                st.write(f"- **{max(file_types, key=file_types.get)}** files make up the majority of your dataset.")
+                st.write("- **Vector Compression:** By turning text into embeddings, ChromaDB consumes a fraction of the original storage space, allowing hyper-fast semantic search.")
