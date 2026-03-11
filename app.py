@@ -36,6 +36,12 @@ if 'vector_db' not in st.session_state:
     else:
         st.session_state.vector_db = None
 
+# Initialize the Soft-Delete Memory Stack
+if 'undo_stack' not in st.session_state:
+    st.session_state.undo_stack = []
+if 'pending_deletes' not in st.session_state:
+    st.session_state.pending_deletes = []
+
 # ==========================================
 # 3. MAIN PAGE SETUP
 # ==========================================
@@ -62,7 +68,7 @@ with st.sidebar:
                 files_to_scan = [f for f in os.listdir(target_folder) if os.path.splitext(f)[1].lower() in valid_extensions]
                 current_filepaths = [os.path.join(target_folder, f) for f in files_to_scan]
                 
-                # 1. Roll Call: Ask what the AI remembers AND when it was last edited
+                # 1. Roll Call
                 db_files = st.session_state.vector_db.get_file_metadata()
                 memorized_filepaths = list(db_files.keys())
                 
@@ -77,14 +83,13 @@ with st.sidebar:
                 files_to_process = []
                 for filepath in current_filepaths:
                     if filepath not in memorized_filepaths:
-                        files_to_process.append(filepath) # Brand new file
+                        files_to_process.append(filepath) 
                     else:
-                        # Exists, but did the user edit it? Check the timestamp!
                         current_mtime = os.path.getmtime(filepath)
                         saved_mtime = db_files.get(filepath, 0.0)
                         
                         if current_mtime > saved_mtime:
-                            files_to_process.append(filepath) # The file was modified!
+                            files_to_process.append(filepath) 
                 
                 if not files_to_process and ghosts_removed == 0:
                     st.success("Everything is already up to date! No new or modified files to scan.")
@@ -113,7 +118,6 @@ with st.sidebar:
                     
                     st.success(f"Sync complete! Removed {ghosts_removed} deleted files and updated/scanned {len(files_to_process)} files.")
             else:
-                # Fallback dummy data if backend fails to load
                 time.sleep(1)
                 st.success("Scanned successfully (Dummy Data mode).")
                 st.session_state.scan_results = [{'filename': 'dummy.pdf', 'filepath': 'path', 'text_content': 'dummy', 'metadata': {'size': '1MB'}}]
@@ -123,8 +127,8 @@ with st.sidebar:
 # ==========================================
 # 5. TABS LAYOUT 
 # ==========================================
-# FIXED: Updated variable names to be semantic and match the code below
-tab_search, tab_cluster, tab_editor = st.tabs(["🔍 Search Files", "🧠 Smart Clusters", "🤖 AI Editor"])
+# ADDED a 4th tab for Document Management
+tab_search, tab_cluster, tab_editor, tab_manage = st.tabs(["🔍 Search Files", "🧠 Smart Clusters", "🤖 AI Editor", "🗄️ Manage Files"])
 
 # --- TAB 1: SEARCH ---
 with tab_search:
@@ -136,8 +140,6 @@ with tab_search:
             st.info(f"Dummy search results for: {search_query}")
         else:
             with st.spinner("Searching vector space..."):
-                # FIXED: Called the method on the session_state object
-                # Ensure your VectorDB class in backend/vector_engine.py has a 'search_documents' method
                 search_results = st.session_state.vector_db.search_documents(query_text=search_query)
                 
                 if "error" in search_results:
@@ -158,7 +160,6 @@ with tab_cluster:
     
     if st.button("Group Similar Files"):
         if BACKEND_READY:
-            # REAL CLUSTERING
             cluster_results = st.session_state.vector_db.cluster_files()
             
             if 'error' in cluster_results:
@@ -192,3 +193,67 @@ with tab_editor:
             dummy_reply = f"I am running locally! You asked: '{prompt}'. (Ollama LLM connection coming in Phase 2!)"
             st.write(dummy_reply)
             st.session_state.chat_messages.append({"role": "assistant", "content": dummy_reply})
+
+# --- TAB 4: MANAGE FILES (UNDO/DELETE LOGIC) ---
+with tab_manage:
+    st.header("Database File Management")
+    st.write("Safely remove indexed files from your AI's memory.")
+
+    if BACKEND_READY and st.session_state.vector_db:
+        # 1. SHOW THE UNDO / CONFIRM MENU IF ITEMS ARE IN THE TRASH
+        if st.session_state.undo_stack:
+            st.warning(f"🗑️ You have {len(st.session_state.undo_stack)} file(s) pending permanent deletion.")
+            col_undo, col_confirm = st.columns(2)
+            
+            with col_undo:
+                if st.button("↩️ Undo Last Deletion", use_container_width=True):
+                    # Pop the filepath back out of the trash
+                    recovered_filepath = st.session_state.undo_stack.pop()
+                    st.session_state.pending_deletes.remove(recovered_filepath)
+                    
+                    filename = os.path.basename(recovered_filepath)
+                    st.success(f"✅ Recovered '{filename}' back to active database!")
+                    time.sleep(1)
+                    st.rerun()
+            
+            with col_confirm:
+                if st.button("⚠️ Permanently Delete All", type="primary", use_container_width=True):
+                    # Physically wipe them from ChromaDB
+                    for filepath in st.session_state.pending_deletes:
+                        st.session_state.vector_db.remove_file(filepath)
+                    
+                    # Clear the trash
+                    st.session_state.undo_stack.clear()
+                    st.session_state.pending_deletes.clear()
+                    
+                    st.error("Data permanently wiped from database.")
+                    time.sleep(1)
+                    st.rerun()
+            
+            st.divider()
+
+        # 2. LIST ALL ACTIVE FILES
+        db_files = st.session_state.vector_db.get_file_metadata()
+        
+        # Filter out the files that are currently sitting in the trash
+        active_filepaths = [fp for fp in db_files.keys() if fp not in st.session_state.pending_deletes]
+
+        if not active_filepaths:
+            st.info("No active files found in the database.")
+        else:
+            for filepath in active_filepaths:
+                filename = os.path.basename(filepath)
+                col1, col2 = st.columns([4, 1])
+                
+                with col1:
+                    st.markdown(f"**📄 {filename}**")
+                    st.caption(filepath)
+                
+                with col2:
+                    if st.button("Delete", key=f"del_{filepath}"):
+                        # Move to trash (Soft Delete)
+                        st.session_state.pending_deletes.append(filepath)
+                        st.session_state.undo_stack.append(filepath)
+                        
+                        st.toast(f"Moved '{filename}' to trash.", icon="🗑️")
+                        st.rerun()
