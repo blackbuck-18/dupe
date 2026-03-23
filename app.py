@@ -1,23 +1,23 @@
 import streamlit as st
 import os
 import time
-import config
 import pandas as pd
 
-# ==========================================
-# 0. PAGE CONFIG (Must be the absolute first command!)
-# ==========================================
-st.set_page_config(page_title="FileSense", page_icon="📂", layout="wide")
-
-# ==========================================
-# 1. INTEGRATION SAFETY & BACKEND LOADING
-# ==========================================
+# 1. LOCAL CONFIG & BACKEND IMPORTS
+# We wrap imports in try/except so the UI still runs even if a library is missing
 try:
+    import config
     from backend.vector_engine import VectorDB
     from backend.parser import extract_text_from_file
     BACKEND_READY = True
-except ImportError:
+except ImportError as e:
     BACKEND_READY = False
+    print(f"Import Error: {e}")
+
+# ==========================================
+# 0. PAGE CONFIG (Must be the absolute first Streamlit command!)
+# ==========================================
+st.set_page_config(page_title="FileSense", page_icon="📂", layout="wide")
 
 # ==========================================
 # 2. STATE MANAGEMENT 
@@ -44,7 +44,7 @@ if 'pending_deletes' not in st.session_state:
     st.session_state.pending_deletes = []
 
 # ==========================================
-# 3. MAIN PAGE SETUP
+# 3. MAIN UI HEADER
 # ==========================================
 st.title("📂 FileSense: AI File Organizer")
 
@@ -54,33 +54,46 @@ else:
     st.success("✅ Backend fully connected. Local AI Engine is active.")
 
 # ==========================================
-# 4. SIDEBAR LAYOUT (Smart Sync Logic!)
+# 4. SIDEBAR: SCANNING & SETTINGS
 # ==========================================
 with st.sidebar:
     st.header("⚙️ Settings & Scanning")
-    target_folder = st.text_input("Target Folder Path", value=str(config.DATA_DIR))
+    
+    # Default path from config, .strip() handles hidden spaces
+    default_path = str(config.DATA_DIR) if BACKEND_READY else ""
+    target_folder = st.text_input(
+        "Target Folder Path", 
+        value=default_path, 
+        key="unique_folder_input"
+    ).strip()
     
     if st.button("Scan Directory"):
         if os.path.exists(target_folder) and os.path.isdir(target_folder):
+            
+            # --- DIAGNOSTIC DEBUG (Shows exactly what the OS sees) ---
+            all_files_in_folder = os.listdir(target_folder)
+            st.warning(f"🔍 DEBUG: Found {len(all_files_in_folder)} total files in folder.")
+            
+            valid_exts = ['.pdf', '.docx', '.txt', '.png', '.jpg', '.jpeg', '.mp3', '.mp4', '.wav']
+            files_to_scan = [f for f in all_files_in_folder if os.path.splitext(f)[1].lower() in valid_exts]
+            st.info(f"🔍 DEBUG: {len(files_to_scan)} files matched supported formats.")
+
             if BACKEND_READY:
                 st.info("Syncing folder with AI memory...")
-                
-                valid_extensions = ['.pdf', '.docx', '.txt']
-                files_to_scan = [f for f in os.listdir(target_folder) if os.path.splitext(f)[1].lower() in valid_extensions]
                 current_filepaths = [os.path.join(target_folder, f) for f in files_to_scan]
                 
-                # 1. Roll Call
+                # Ask DB what it already knows
                 db_files = st.session_state.vector_db.get_file_metadata()
                 memorized_filepaths = list(db_files.keys())
                 
-                # 2. Forget the Ghosts
+                # 1. REMOVE DELETED FILES
                 ghosts_removed = 0
                 for ghost_path in memorized_filepaths:
                     if ghost_path not in current_filepaths:
                         st.session_state.vector_db.remove_file(ghost_path)
                         ghosts_removed += 1
                         
-                # 3. Find New OR Modified Files
+                # 2. FIND CHANGES (New or Modified)
                 files_to_process = []
                 for filepath in current_filepaths:
                     if filepath not in memorized_filepaths:
@@ -88,54 +101,62 @@ with st.sidebar:
                     else:
                         current_mtime = os.path.getmtime(filepath)
                         saved_mtime = db_files.get(filepath, 0.0)
-                        
                         if current_mtime > saved_mtime:
                             files_to_process.append(filepath) 
                 
                 if not files_to_process and ghosts_removed == 0:
-                    st.success("Everything is already up to date! No new or modified files to scan.")
+                    st.success("Everything is already up to date!")
                 else:
-                    if files_to_process:
-                        progress_text = "Parsing new and updated files..."
-                        my_bar = st.progress(0, text=progress_text)
-                        total_files = len(files_to_process)
-                        
-                        st.session_state.scan_results = [] 
-                        
-                        for idx, filepath in enumerate(files_to_process):
-                            filename = os.path.basename(filepath)
-                            parsed_data = extract_text_from_file(filepath)
-                            
-                            if not parsed_data.get('error'):
-                                st.session_state.vector_db.add_file(
-                                    filename=parsed_data['filename'],
-                                    filepath=parsed_data['filepath'],
-                                    text=parsed_data['text_content'],
-                                    mtime=os.path.getmtime(filepath)
-                                )
-                                st.session_state.scan_results.append(parsed_data)
-                                
-                            percent_complete = int(((idx + 1) / total_files) * 100)
-                            my_bar.progress(percent_complete, text=f"Processed {filename}...")
+                    # 3. START SCANNING
+                    my_bar = st.progress(0, text="Initializing AI analysis...")
+                    processed_count = 0
                     
-                    st.success(f"Sync complete! Removed {ghosts_removed} deleted files and updated/scanned {len(files_to_process)} files.")
+                    for idx, filepath in enumerate(files_to_process):
+                        parsed_data = extract_text_from_file(filepath)
+                        if not parsed_data.get('error'):
+                            st.session_state.vector_db.add_file(
+                                filename=parsed_data['filename'],
+                                filepath=parsed_data['filepath'],
+                                text=parsed_data['text_content'],
+                                mtime=os.path.getmtime(filepath)
+                            )
+                            processed_count += 1
+                        
+                        percent = int(((idx + 1) / len(files_to_process)) * 100)
+                        my_bar.progress(percent, text=f"Processing: {os.path.basename(filepath)}")
+                    
+                    st.success(f"✅ Sync complete! Scanned {processed_count} files and removed {ghosts_removed} deleted files.")
+                    time.sleep(1)
+                    st.rerun()
             else:
-                time.sleep(1)
-                st.success("Scanned successfully (Dummy Data mode).")
-                st.session_state.scan_results = [{'filename': 'dummy.pdf', 'filepath': 'path', 'text_content': 'dummy', 'metadata': {'size': '1MB'}}]
+                st.error("AI Backend failed to load. Check terminal.")
         else:
-            st.error("Invalid folder path. Please check and try again.")
+            st.error(f"❌ Path Error: The folder '{target_folder}' does not exist.")
+
+    st.divider()
+    st.subheader("Danger Zone")
+    if st.button("🚨 Wipe AI Memory", type="primary", use_container_width=True):
+        if BACKEND_READY:
+            with st.spinner("Erasing knowledge..."):
+                st.session_state.vector_db.clear_database()
+                st.session_state.undo_stack.clear()
+                st.session_state.pending_deletes.clear()
+                st.session_state.scan_results = []
+            st.success("✅ AI Memory wiped!")
+            time.sleep(1)
+            st.rerun()
 
 # ==========================================
 # 5. TABS LAYOUT 
 # ==========================================
-# ADDED a 5th tab for Database Insights!
-tab_search, tab_cluster, tab_editor, tab_manage, tab_insights = st.tabs(["🔍 Search Files", "🧠 Smart Clusters", "🤖 AI Editor", "🗄️ Manage Files", "📊 Insights"])
+tab_search, tab_cluster, tab_editor, tab_manage, tab_insights = st.tabs([
+    "🔍 Search Files", "🧠 Smart Clusters", "🤖 AI Editor", "🗄️ Manage Files", "📊 Insights"
+])
 
 # --- TAB 1: SEARCH ---
 with tab_search:
     st.header("Search Your Offline Files")
-    search_query = st.text_input("What are you looking for?")
+    search_query = st.text_input("What are you looking for?", placeholder="e.g. machine learning project ideas")
     
     if search_query:
         if not BACKEND_READY:
@@ -148,11 +169,10 @@ with tab_search:
                     st.info(search_results["error"])
                 else:
                     st.success(f"Found {len(search_results['matches'])} relevant matches.")
-                    
                     for match in search_results['matches']:
                         with st.container(border=True):
-                            st.markdown(f"**📄 {match['filename']}** (Distance: `{match['distance']}`)")
-                            st.caption(f"Path: {match['filepath']}")
+                            st.markdown(f"**📄 {match['filename']}**")
+                            st.caption(f"Path: {match['filepath']} | Match Score: {match['distance']}")
                             st.write(match['snippet'])
 
 # --- TAB 2: CLUSTERING ---
@@ -163,7 +183,6 @@ with tab_cluster:
     if st.button("Group Similar Files"):
         if BACKEND_READY:
             cluster_results = st.session_state.vector_db.cluster_files()
-            
             if 'error' in cluster_results:
                 st.error(cluster_results['error'])
             elif 'warning' in cluster_results:
@@ -171,9 +190,9 @@ with tab_cluster:
             else:
                 st.success("Clusters generated successfully!")
                 for cluster_id, files in cluster_results.items():
-                    st.write(f"### 🤖  {cluster_id}")
-                    for f in files:
-                        st.write(f"- {f}")
+                    with st.expander(f"🤖 {cluster_id}", expanded=True):
+                        for f in files:
+                            st.write(f"- {f}")
         else:
             st.success("Simulated Clusters generated successfully!")
 
@@ -186,50 +205,20 @@ with tab_editor:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
             
-    if prompt := st.chat_input("Ask the AI to analyze, summarize, or draft new text..."):
+    if prompt := st.chat_input("Ask the AI to analyze, summarize, or draft..."):
         st.session_state.chat_messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.write(prompt)
             
         with st.chat_message("assistant"):
-            dummy_reply = f"I am running locally! You asked: '{prompt}'. (Ollama LLM connection coming in Phase 2!)"
+            dummy_reply = f"I am running locally! (Ollama bridge coming next). You asked: '{prompt}'"
             st.write(dummy_reply)
             st.session_state.chat_messages.append({"role": "assistant", "content": dummy_reply})
 
 # --- TAB 4: MANAGE FILES ---
 with tab_manage:
     st.header("Database File Management")
-    st.write("Safely remove indexed files from your AI's memory.")
-
     if BACKEND_READY and st.session_state.vector_db:
-        if st.session_state.undo_stack:
-            st.warning(f"🗑️ You have {len(st.session_state.undo_stack)} file(s) pending permanent deletion.")
-            col_undo, col_confirm = st.columns(2)
-            
-            with col_undo:
-                if st.button("↩️ Undo Last Deletion", use_container_width=True):
-                    recovered_filepath = st.session_state.undo_stack.pop()
-                    st.session_state.pending_deletes.remove(recovered_filepath)
-                    
-                    filename = os.path.basename(recovered_filepath)
-                    st.success(f"✅ Recovered '{filename}' back to active database!")
-                    time.sleep(1)
-                    st.rerun()
-            
-            with col_confirm:
-                if st.button("⚠️ Permanently Delete All", type="primary", use_container_width=True):
-                    for filepath in st.session_state.pending_deletes:
-                        st.session_state.vector_db.remove_file(filepath)
-                    
-                    st.session_state.undo_stack.clear()
-                    st.session_state.pending_deletes.clear()
-                    
-                    st.error("Data permanently wiped from database.")
-                    time.sleep(1)
-                    st.rerun()
-            
-            st.divider()
-
         db_files = st.session_state.vector_db.get_file_metadata()
         active_filepaths = [fp for fp in db_files.keys() if fp not in st.session_state.pending_deletes]
 
@@ -239,76 +228,35 @@ with tab_manage:
             for filepath in active_filepaths:
                 filename = os.path.basename(filepath)
                 col1, col2 = st.columns([4, 1])
-                
                 with col1:
                     st.markdown(f"**📄 {filename}**")
                     st.caption(filepath)
-                
                 with col2:
                     if st.button("Delete", key=f"del_{filepath}"):
-                        st.session_state.pending_deletes.append(filepath)
-                        st.session_state.undo_stack.append(filepath)
-                        
-                        st.toast(f"Moved '{filename}' to trash.", icon="🗑️")
+                        st.session_state.vector_db.remove_file(filepath)
+                        st.toast(f"Removed '{filename}' from AI memory.")
+                        time.sleep(0.5)
                         st.rerun()
 
-# --- TAB 5: INSIGHTS & ANALYTICS ---
+# --- TAB 5: INSIGHTS ---
 with tab_insights:
     st.header("📊 Database Insights")
-    st.write("A real-time overview of your local AI knowledge base.")
-
     if BACKEND_READY and st.session_state.vector_db:
         db_files = st.session_state.vector_db.get_file_metadata()
-        active_filepaths = [fp for fp in db_files.keys() if fp not in st.session_state.pending_deletes]
-
-        if not active_filepaths:
-            st.info("No data available to visualize. Scan a folder first!")
+        if not db_files:
+            st.info("No data to visualize. Scan a folder first!")
         else:
-            # 1. Calculate Metrics
-            total_files = len(active_filepaths)
             file_types = {}
-            total_size_bytes = 0
-            
-            for fp in active_filepaths:
-                # Get file extension (e.g., '.pdf') and remove the dot
-                ext = os.path.splitext(fp)[1].lower().replace(".", "").upper()
-                if not ext:
-                    ext = "UNKNOWN"
-                    
+            for fp in db_files.keys():
+                ext = os.path.splitext(fp)[1].lower().replace(".", "").upper() or "UNKNOWN"
                 file_types[ext] = file_types.get(ext, 0) + 1
-                
-                # Check actual file size on the hard drive
-                if os.path.exists(fp):
-                    total_size_bytes += os.path.getsize(fp)
-
-            # Convert bytes to Megabytes (MB)
-            total_size_mb = total_size_bytes / (1024 * 1024)
-
-            # 2. Render Top KPI Metrics
-            col1, col2, col3 = st.columns(3)
+            
+            col1, col2 = st.columns([2, 1])
             with col1:
-                st.metric("Total Indexed Files", total_files)
-            with col2:
-                st.metric("Total Storage Tracked", f"{total_size_mb:.2f} MB")
-            with col3:
-                st.metric("Document Types", len(file_types))
-
-            st.divider()
-
-            # 3. Render Visual Charts and Insights
-            col_chart1, col_chart2 = st.columns([2, 1])
-
-            with col_chart1:
                 st.subheader("Distribution by File Type")
-                # Create a Pandas DataFrame to perfectly format the Streamlit Bar Chart
-                chart_data = pd.DataFrame(
-                    {"Count": list(file_types.values())}, 
-                    index=list(file_types.keys())
-                )
+                chart_data = pd.DataFrame({"Count": list(file_types.values())}, index=list(file_types.keys()))
                 st.bar_chart(chart_data, color="#1E88E5")
-
-            with col_chart2:
-                st.subheader("AI Knowledge Base Summary")
-                st.write(f"- Your local AI engine currently has instant memory access to **{total_files} distinct documents**.")
-                st.write(f"- **{max(file_types, key=file_types.get)}** files make up the majority of your dataset.")
-                st.write("- **Vector Compression:** By turning text into embeddings, ChromaDB consumes a fraction of the original storage space, allowing hyper-fast semantic search.")
+            with col2:
+                st.subheader("Summary")
+                st.metric("Total Files", len(db_files))
+                st.write(f"Your primary format is **{max(file_types, key=file_types.get)}**.")
