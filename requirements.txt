@@ -1,6 +1,7 @@
 # UI & Frontend
 streamlit
 streamlit-diff-viewer
+PySide6
 
 # Database & AI Logic
 chromadb
