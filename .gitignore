@@ -10,3 +10,6 @@ __pycache__/
 
 # Ignore Streamlit specific settings/cache
 .streamlit/
+
+# Ignore models
+models/

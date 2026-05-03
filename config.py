@@ -18,6 +18,12 @@ CHROMA_DB_DIR = DATA_DIR / "chroma_db"
 # Files here are never shown to the user and are cleaned up after processing.
 TEMP_DIR = BASE_DIR / "temp"
 
+# FIX — OFFLINE GUARANTEE: Local folder where the embedding model lives.
+# This is the ONLY place vector_engine.py is allowed to load models from.
+# The model is downloaded here once by setup_models.py, then never fetched from
+# the internet again. This folder travels with the project — it is not a system cache.
+MODEL_CACHE_DIR = BASE_DIR / "models"
+
 
 # ==========================================
 # 2. GLOBAL CONSTANTS (The locked-in rules)
@@ -71,6 +77,11 @@ if not CHROMA_DB_DIR.exists():
 # Required by the Phase 2 protocol spec for temporary file conversion storage.
 if not TEMP_DIR.exists():
     os.makedirs(TEMP_DIR)
+
+# OFFLINE GUARANTEE: Create the local model cache folder if it doesn't exist yet.
+# setup_models.py will populate it. vector_engine.py will refuse to load from anywhere else.
+if not MODEL_CACHE_DIR.exists():
+    os.makedirs(MODEL_CACHE_DIR)
 
 # Confirmation message on startup.
 print("✅ Configuration loaded. Data directories ready.")

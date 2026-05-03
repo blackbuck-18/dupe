@@ -27,14 +27,47 @@ class VectorDB:
     
     def __init__(self):
         try:
-            self.model = SentenceTransformer(config.MODEL_NAME)  # FIX 1: use config constant, not hardcoded string
+            # OFFLINE GUARANTEE: Two arguments work together to enforce this:
+            #
+            #   cache_folder=config.MODEL_CACHE_DIR
+            #       Tells sentence-transformers to look ONLY in the project's own models/
+            #       folder. It will never touch ~/.cache/huggingface/ or any system path.
+            #
+            #   local_files_only=True
+            #       Tells the HuggingFace backend to make zero network calls.
+            #       If the model is not found in cache_folder, it raises OSError
+            #       immediately rather than silently downloading from the internet.
+            #
+            # If this raises OSError, it means setup_models.py has not been run yet.
+            # That is the correct failure mode — loud and clear, not a silent phone-home.
+            self.model = SentenceTransformer(
+                config.MODEL_NAME,
+                cache_folder=str(config.MODEL_CACHE_DIR),
+                local_files_only=True
+            )
+        except OSError:
+            # Model not found locally — setup_models.py has not been run.
+            # Log a clear, actionable message and continue with model=None.
+            # The app will still start; AI features will show their "not ready" messages
+            # rather than crashing the entire application.
+            logging.error(
+                "OFFLINE SETUP REQUIRED: Embedding model not found in local cache.\n"
+                f"  Expected location : {config.MODEL_CACHE_DIR}\n"
+                f"  Expected model    : {config.MODEL_NAME}\n"
+                "  Fix: Run `python setup_models.py` once (requires internet).\n"
+                "  After that, FileSense is permanently offline."
+            )
+            self.model = None
         except Exception as e:
             logging.error(f"Critical error loading SentenceTransformer: {e}")
             self.model = None
 
         try:
             self.chroma_client = chromadb.PersistentClient(path=str(config.CHROMA_DB_DIR))
-            self.collection = self.chroma_client.get_or_create_collection(name="filesense_docs")
+            self.collection = self.chroma_client.get_or_create_collection(
+                name="filesense_docs",
+                metadata={"hnsw:space": "cosine"}  # <--- explicitly forces Cosine Similarity math
+            )
         except Exception as e:
             logging.error(f"Critical error initializing ChromaDB: {e}")
             self.chroma_client = None
@@ -57,6 +90,7 @@ class VectorDB:
             import logging
             logging.error(f"Error clearing database: {e}")
             return False
+
     # ==========================================
     # PART A: Feature Engineering Module
     # ==========================================
@@ -93,7 +127,7 @@ class VectorDB:
             logging.error(f"Error deleting file {filepath}: {e}")
             return False
 
-    def add_file(self, filename: str, filepath: str, text: str, mtime: float = 0.0):
+    def add_file(self, filename: str, filepath: str, text: str, mtime: float = 0.0, preserve_structure: bool = False, parent_folder: str = ""):
         """
         Adds or UPDATES a document and its modification timestamp in the database.
         Uses upsert so re-scanning a modified file replaces the old record cleanly.
@@ -102,29 +136,29 @@ class VectorDB:
             return False
             
         try:
-            # FIX 4: Use filepath as the stable document ID instead of uuid4().
-            # This is the core fix — it means the same file can never be duplicated.
-            # upsert() below will UPDATE the existing record if filepath already exists.
+            # Use filepath as the stable document ID instead of uuid4().
             doc_id = filepath
 
             # Convert the text into an AI embedding
             embedding = self._generate_embedding(text)
             
             if embedding:
-                # FIX 5: collection.upsert() instead of collection.add().
-                # add() crashes if the ID already exists. upsert() safely replaces it.
+                # Upsert safely replaces the record if the ID already exists.
                 self.collection.upsert(
                     documents=[text],
                     embeddings=[embedding],
                     metadatas=[{
                         "filename": filename, 
                         "filepath": filepath,
-                        "mtime": mtime
+                        "mtime": mtime,
+                        "preserve_structure": preserve_structure,
+                        "parent_folder": parent_folder
                     }],
                     ids=[doc_id]
                 )
                 return True
         except Exception as e:
+            import logging
             logging.error(f"Error adding file to DB: {e}")
             return False
 
@@ -313,3 +347,4 @@ class VectorDB:
 
         except Exception as e:
             return {"error": str(e)}
+        

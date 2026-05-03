@@ -5,6 +5,31 @@ import config
 # The default local port where Ollama runs
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
 
+def _smart_truncate(text: str, max_words: int) -> str:
+    """
+    O(N) Time | O(N) Space
+    Truncates text safely at the nearest sentence boundary to prevent sending 
+    broken code blocks or half-finished sentences to the LLM.
+    """
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+
+    # Join the raw truncated string
+    chopped = " ".join(words[:max_words])
+
+    # Search backward from the cut-off point for a safe break character
+    last_period = chopped.rfind('.')
+    last_newline = chopped.rfind('\n')
+
+    # Pick the best clean break point
+    break_point = max(last_period, last_newline)
+
+    if break_point > 0:
+        return chopped[:break_point + 1] + "\n\n... [Context Truncated for Memory Limits]"
+    else:
+        return chopped + "..."
+
 def ask_local_ai(prompt: str, context_text: str = "") -> str:
     """
     Sends a prompt and optional file context to your local Ollama LLM.
@@ -12,10 +37,8 @@ def ask_local_ai(prompt: str, context_text: str = "") -> str:
     """
     # 1. Combine the user's question with the context from ChromaDB
     if context_text.strip():
-        # Truncate context if it's too massive (protects CPU memory)
-        words = context_text.split()
-        if len(words) > config.MAX_CONTEXT_WORDS:
-            context_text = " ".join(words[:config.MAX_CONTEXT_WORDS]) + "..."
+        # Safely truncate to protect CPU memory and prevent formatting hallucinations
+        context_text = _smart_truncate(context_text, config.MAX_CONTEXT_WORDS)
             
         system_prompt = (
             f"You are the FileSense AI. Use the following extracted file snippets "
@@ -31,9 +54,9 @@ def ask_local_ai(prompt: str, context_text: str = "") -> str:
     payload = {
         "model": config.OLLAMA_MODEL,
         "prompt": system_prompt,
-        "stream": False,  # Set to True later if you want typewriter text effects
+        "stream": False, 
         "options": {
-            "temperature": 0.2  # Keep it low so the AI is factual, not overly creative
+            "temperature": 0.2  # Keep it low so the AI is factual
         }
     }
 
@@ -44,13 +67,13 @@ def ask_local_ai(prompt: str, context_text: str = "") -> str:
             json=payload, 
             timeout=config.INFERENCE_TIMEOUT
         )
+  
         
-        # --- NEW: Catch the exact 404 Missing Model Error ---
         if response.status_code == 404:
             return (
                 "🚨 **AI Model Not Found!**<br><br>"
                 "Ollama is running, but the AI brain hasn't been downloaded yet.<br>"
-                "Open your terminal and run: <code>ollama run llama3</code>"
+                f"Open your terminal and run: <code>ollama run {config.OLLAMA_MODEL}</code>"
             )
             
         response.raise_for_status()
@@ -70,3 +93,4 @@ def ask_local_ai(prompt: str, context_text: str = "") -> str:
     except Exception as e:
         logging.error(f"Ollama API Error: {str(e)}")
         return f"⚠️ **Unexpected Error:** {str(e)}"
+    

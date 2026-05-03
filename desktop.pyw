@@ -3,14 +3,10 @@ import os
 import keyboard
 import time
 import re
-from PySide6.QtWidgets import (QApplication, QMainWindow, QSystemTrayIcon, QMenu, 
-                               QVBoxLayout, QHBoxLayout, QWidget, QStyle, QLineEdit, 
-                               QTextBrowser, QPushButton, QLabel, QStackedWidget, 
-                               QFileDialog, QProgressBar, QFileSystemModel, QTreeView, QHeaderView)
-from PySide6.QtGui import QAction, QFont, QTextCursor, QIcon, QColor
-from PySide6.QtCore import QObject, Signal, Qt, QThread, QPoint
-
-# --- BACKEND IMPORTS ---
+# ==========================================
+# 1. BACKEND IMPORTS MUST GO FIRST
+# (This prevents PySide6 shiboken hooks from crashing pandas/sklearn)
+# ==========================================
 try:
     import config
     from backend.vector_engine import VectorDB
@@ -20,6 +16,17 @@ try:
 except ImportError as e:
     BACKEND_READY = False
     print(f"Backend Import Error: {e}")
+
+# ==========================================
+# 2. PYSIDE6 IMPORTS MUST GO SECOND
+# ==========================================
+from PySide6.QtWidgets import (QApplication, QMainWindow, QSystemTrayIcon, QMenu, 
+                               QVBoxLayout, QHBoxLayout, QWidget, QStyle, QLineEdit, 
+                               QTextBrowser, QPushButton, QLabel, QStackedWidget, 
+                               QFileDialog, QProgressBar, QFileSystemModel, QTreeView, QHeaderView)
+from PySide6.QtGui import QAction, QFont, QTextCursor, QIcon, QColor
+from PySide6.QtCore import QObject, Signal, Qt, QThread, QPoint
+
 
 # ==========================================
 # THREADING: Background Scanner

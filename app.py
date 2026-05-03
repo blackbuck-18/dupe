@@ -70,7 +70,13 @@ with st.sidebar:
     if st.button("🚀 Fast Scan Directory"):
         if os.path.exists(target_folder) and os.path.isdir(target_folder):
             
-            valid_exts = ['.pdf', '.docx', '.txt', '.png', '.jpg', '.jpeg', '.mp3', '.mp4', '.wav']
+            # PROBLEM 1 FIX: Use config.SUPPORTED_EXTENSIONS as the single source of truth.
+            # Previously this list was hardcoded here (9 types) and separately hardcoded
+            # in parser.py and config.py (3 types each), causing the scan loop to collect
+            # files that the parser would then silently reject. Now there is one list,
+            # owned by config.py, read by everyone. To add a new file type, update
+            # SUPPORTED_EXTENSIONS in config.py — nothing else needs to change.
+            valid_exts = config.SUPPORTED_EXTENSIONS
             current_filepaths = []
             total_files_seen = 0
             
@@ -294,3 +300,4 @@ with tab_insights:
                 st.subheader("Summary")
                 st.metric("Total Files", len(db_files))
                 st.write(f"Your primary format is **{max(file_types, key=file_types.get)}**.")
+                
