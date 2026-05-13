@@ -85,3 +85,12 @@ if not MODEL_CACHE_DIR.exists():
 
 # Confirmation message on startup.
 print("✅ Configuration loaded. Data directories ready.")
+
+
+# ============================================================
+# Filler Word Cleaning
+# ============================================================
+ENABLE_FILLER_CLEANING = True
+FILLER_FREQUENCY_THRESHOLD = 0.03
+FILLER_MIN_WORD_LENGTH = 3
+MIN_WORDS_FOR_CLEANING = 50

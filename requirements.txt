@@ -3,7 +3,7 @@ streamlit
 streamlit-diff-viewer
 PySide6
 
-# Database & AI Logic
+# Database & AI Logic 
 chromadb
 sentence-transformers
 scikit-learn

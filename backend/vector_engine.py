@@ -18,6 +18,7 @@ if sys.platform == 'win32':
 
 from sentence_transformers import SentenceTransformer
 import config
+from backend.filler_cleaner import remove_fillers
 
 class VectorDB:
     """
@@ -139,20 +140,28 @@ class VectorDB:
             # Use filepath as the stable document ID instead of uuid4().
             doc_id = filepath
 
+            # Clean extracted text before embedding
+            ext = os.path.splitext(filepath)[1].lower()
+            cleaned_text = remove_fillers(text, file_extension=ext)
+
             # Convert the text into an AI embedding
-            embedding = self._generate_embedding(text)
+            embedding = self._generate_embedding(cleaned_text)
             
             if embedding:
                 # Upsert safely replaces the record if the ID already exists.
                 self.collection.upsert(
-                    documents=[text],
+                    documents=[cleaned_text],
                     embeddings=[embedding],
                     metadatas=[{
-                        "filename": filename, 
+                        "filename": filename,
                         "filepath": filepath,
                         "mtime": mtime,
                         "preserve_structure": preserve_structure,
-                        "parent_folder": parent_folder
+                        "parent_folder": parent_folder,
+                        "cleaned": True,
+                        "raw_length": len(text),
+                        "cleaned_length": len(cleaned_text),
+                        "removed_ratio": round(1 - (len(cleaned_text) / max(len(text), 1)), 3)
                     }],
                     ids=[doc_id]
                 )
