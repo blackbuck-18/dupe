@@ -2,7 +2,7 @@ import streamlit as st
 import os
 import time
 import pandas as pd
-import concurrent.futures # <-- Added for High-Speed Multi-Threading
+import concurrent.futures
 
 # 1. LOCAL CONFIG & BACKEND IMPORTS
 try:
@@ -20,11 +20,11 @@ except ImportError as e:
 st.set_page_config(page_title="FileSense", page_icon="📂", layout="wide")
 
 # ==========================================
-# 2. STATE MANAGEMENT 
+# 2. STATE MANAGEMENT
 # ==========================================
 if 'scan_results' not in st.session_state:
     st.session_state.scan_results = []
-    
+
 if 'chat_messages' not in st.session_state:
     st.session_state.chat_messages = [
         {"role": "assistant", "content": "Hello! I am your local AI. How can I help you analyze or summarize your files today?"}
@@ -56,95 +56,84 @@ else:
 # ==========================================
 with st.sidebar:
     st.header("⚙️ Settings & Scanning")
-    
+
     default_path = str(config.DATA_DIR) if BACKEND_READY else ""
     target_folder = st.text_input(
-        "Target Folder Path", 
-        value=default_path, 
+        "Target Folder Path",
+        value=default_path,
         key="unique_folder_input"
     ).strip()
-    
-    # NEW: Checkbox to preserve existing folder structures!
+
     preserve_structure = st.checkbox("📁 Keep Folder Structure (Skip AI Clustering)")
-    
+
     if st.button("🚀 Fast Scan Directory"):
         if os.path.exists(target_folder) and os.path.isdir(target_folder):
-            
+
             # PROBLEM 1 FIX: Use config.SUPPORTED_EXTENSIONS as the single source of truth.
-            # Previously this list was hardcoded here (9 types) and separately hardcoded
-            # in parser.py and config.py (3 types each), causing the scan loop to collect
-            # files that the parser would then silently reject. Now there is one list,
-            # owned by config.py, read by everyone. To add a new file type, update
-            # SUPPORTED_EXTENSIONS in config.py — nothing else needs to change.
             valid_exts = config.SUPPORTED_EXTENSIONS
             current_filepaths = []
             total_files_seen = 0
-            
+
             for root, dirs, files in os.walk(target_folder):
                 total_files_seen += len(files)
                 for file in files:
                     if os.path.splitext(file)[1].lower() in valid_exts:
                         full_path = os.path.join(root, file)
                         current_filepaths.append(full_path)
-            
+
             st.warning(f"🔍 DEBUG: Found {total_files_seen} total files across all sub-folders.")
             st.info(f"🔍 DEBUG: {len(current_filepaths)} files matched supported formats.")
 
             if BACKEND_READY:
                 st.info("Syncing entire directory tree with AI memory...")
-                
+
                 db_files = st.session_state.vector_db.get_file_metadata()
                 memorized_filepaths = list(db_files.keys())
-                
-                # 1. DELETE GHOSTS 
+
+                # 1. DELETE GHOSTS
                 ghosts_removed = 0
                 for ghost_path in memorized_filepaths:
                     if ghost_path not in current_filepaths:
                         st.session_state.vector_db.remove_file(ghost_path)
                         ghosts_removed += 1
-                        
+
                 # 2. FIND CHANGES
                 files_to_process = []
                 for filepath in current_filepaths:
                     if filepath not in memorized_filepaths:
-                        files_to_process.append(filepath) 
+                        files_to_process.append(filepath)
                     else:
                         current_mtime = os.path.getmtime(filepath)
                         saved_mtime = db_files.get(filepath, 0.0)
                         if current_mtime > saved_mtime:
-                            files_to_process.append(filepath) 
-                
+                            files_to_process.append(filepath)
+
                 if not files_to_process and ghosts_removed == 0:
                     st.success("Everything is already up to date! No new changes detected.")
                 else:
-                    # 3. PYTORCH-OPTIMIZED SCANNING
+                    # 3. SCAN WITH PROGRESS
                     my_bar = st.progress(0, text="Initializing AI analysis...")
                     processed_count = 0
                     total_to_process = len(files_to_process)
-                    
+
                     for idx, filepath in enumerate(files_to_process):
-                        # 1. Read the text (Fast I/O)
                         parsed_data = extract_text_from_file(filepath)
-                        
+
                         if not parsed_data.get('error'):
-                            # Find the actual name of the folder this file is sitting in
                             actual_folder_name = os.path.basename(os.path.dirname(filepath))
-                            
-                            # 2. Let PyTorch's native OpenMP handle the C++ parallel embedding
                             st.session_state.vector_db.add_file(
                                 filename=parsed_data['filename'],
                                 filepath=parsed_data['filepath'],
                                 text=parsed_data['text_content'],
                                 mtime=os.path.getmtime(filepath),
-                                preserve_structure=preserve_structure,  # <--- Passes the UI checkbox flag
-                                parent_folder=actual_folder_name        # <--- Passes the actual Windows folder name
+                                preserve_structure=preserve_structure,
+                                parent_folder=actual_folder_name
                             )
                             processed_count += 1
-                        
-                        # Update progress bar
+
                         percent = int(((idx + 1) / total_to_process) * 100)
                         my_bar.progress(percent, text=f"Vectorizing: {os.path.basename(filepath)}")
-                    
+
                     st.success(f"✅ Sync complete! Scanned {processed_count} files and removed {ghosts_removed} deleted files.")
                     time.sleep(1)
                     st.rerun()
@@ -167,7 +156,7 @@ with st.sidebar:
             st.rerun()
 
 # ==========================================
-# 5. TABS LAYOUT 
+# 5. TABS LAYOUT
 # ==========================================
 tab_search, tab_cluster, tab_editor, tab_manage, tab_insights = st.tabs([
     "🔍 Search Files", "🧠 Smart Clusters", "🤖 AI Editor", "🗄️ Manage Files", "📊 Insights"
@@ -177,14 +166,14 @@ tab_search, tab_cluster, tab_editor, tab_manage, tab_insights = st.tabs([
 with tab_search:
     st.header("Search Your Offline Files")
     search_query = st.text_input("What are you looking for?", placeholder="e.g. machine learning project ideas")
-    
+
     if search_query:
         if not BACKEND_READY:
             st.info(f"Dummy search results for: {search_query}")
         else:
             with st.spinner("Searching vector space..."):
                 search_results = st.session_state.vector_db.search_documents(query_text=search_query)
-                
+
                 if "error" in search_results:
                     st.info(search_results["error"])
                 else:
@@ -195,12 +184,12 @@ with tab_search:
                             st.caption(f"Path: {match['filepath']} | Match Score: {match['distance']}")
                             st.write(match['snippet'])
 
-# --- TAB 2: CLUSTERING ---
+# --- TAB 2: SMART CLUSTERS ---
 with tab_cluster:
     st.header("Group Similar Files")
     st.write("Use AI to automatically group your files by topic.")
-    
-    if st.button("Group Similar Files"):
+
+    if st.button("🧠 Group Similar Files"):
         if BACKEND_READY:
             cluster_results = st.session_state.vector_db.cluster_files()
             if 'error' in cluster_results:
@@ -219,46 +208,44 @@ with tab_cluster:
 # --- TAB 3: AI EDITOR ---
 with tab_editor:
     st.header("Offline AI Editor")
-    st.caption(f"Powered by local {config.OLLAMA_MODEL} engine.")
-    
-    # Render previous chat history
+    st.caption(f"Powered by local {config.OLLAMA_MODEL if BACKEND_READY else 'AI'} engine.")
+
     for msg in st.session_state.chat_messages:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
-            
-    # When the user types a question...
+
     if prompt := st.chat_input("Ask the AI about your scanned files..."):
-        
-        # 1. Save and display the user's prompt
         st.session_state.chat_messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.write(prompt)
-            
-        # 2. Generate the AI response
+
         with st.chat_message("assistant"):
             with st.spinner("🧠 AI is thinking..."):
-                
-                # OPTIONAL: Search your database first to give the AI context!
                 context_str = ""
                 if BACKEND_READY and st.session_state.vector_db:
-                    # We silently search ChromaDB for the 3 most relevant paragraphs
                     search_results = st.session_state.vector_db.search_documents(prompt, top_k=3)
                     if "matches" in search_results:
                         for match in search_results["matches"]:
                             context_str += f"[From {match['filename']}]: {match['snippet']}\n\n"
-                
-                # Import the bridge and ask the LLM
+
                 from backend.ollama_bridge import ask_local_ai
                 ai_reply = ask_local_ai(prompt=prompt, context_text=context_str)
-                
-                # Display the answer and save it to history
+
                 st.write(ai_reply)
                 st.session_state.chat_messages.append({"role": "assistant", "content": ai_reply})
 
 # --- TAB 4: MANAGE FILES ---
 with tab_manage:
-    st.header("Database File Management")
+    st.header("Manage Files")
+
     if BACKEND_READY and st.session_state.vector_db:
+
+        # Refresh Database Status button — matches desktop Manage Files page
+        if st.button("🔄 Refresh Database Status"):
+            st.rerun()
+
+        st.divider()
+
         db_files = st.session_state.vector_db.get_file_metadata()
         active_filepaths = [fp for fp in db_files.keys() if fp not in st.session_state.pending_deletes]
 
@@ -290,7 +277,7 @@ with tab_insights:
             for fp in db_files.keys():
                 ext = os.path.splitext(fp)[1].lower().replace(".", "").upper() or "UNKNOWN"
                 file_types[ext] = file_types.get(ext, 0) + 1
-            
+
             col1, col2 = st.columns([2, 1])
             with col1:
                 st.subheader("Distribution by File Type")
